@@ -1,1 +1,98 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"Brazil UGC draft","type":"object","required":["title","hook","dialogue_pt_br","scene_description","background_motion","ambience","beats"],"properties":{"title":{"type":"string"},"dialogue_pt_br":{"type":"string"},"scene_description":{"type":"string"},"background_motion":{"type":"string"},"ambience":{"type":"string"},"beats":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"object","required":["start","end","action","camera","audio"],"properties":{"start":{"type":"number","minimum":0,"exclusiveMaximum":15},"end":{"type":"number","exclusiveMinimum":0,"maximum":15},"action":{"type":"string"},"camera":{"type":"string"},"audio":{"type":"string"}},"additionalProperties":false}},"hook":{"type":"string","minLength":1,"maxLength":1000,"pattern":"\\S"}},"additionalProperties":false}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UGC draft",
+  "type": "object",
+  "required": [
+    "title",
+    "hook",
+    "scene_description",
+    "background_motion",
+    "ambience",
+    "beats"
+  ],
+  "properties": {
+    "title": {
+      "type": "string"
+    },
+    "dialogue_pt_br": {
+      "type": "string"
+    },
+    "scene_description": {
+      "type": "string"
+    },
+    "background_motion": {
+      "type": "string"
+    },
+    "ambience": {
+      "type": "string"
+    },
+    "beats": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "action",
+          "camera",
+          "audio"
+        ],
+        "properties": {
+          "start": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMaximum": 15
+          },
+          "end": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 15
+          },
+          "action": {
+            "type": "string"
+          },
+          "camera": {
+            "type": "string"
+          },
+          "audio": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "hook": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "\\S"
+    },
+    "dialogue": {
+      "type": "string"
+    },
+    "language": {
+      "type": "string",
+      "enum": [
+        "pt-BR",
+        "es-MX",
+        "en-US",
+        "fil-PH"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "anyOf": [
+    {
+      "required": [
+        "dialogue"
+      ]
+    },
+    {
+      "required": [
+        "dialogue_pt_br"
+      ]
+    }
+  ]
+}

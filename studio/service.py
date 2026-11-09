@@ -2,6 +2,7 @@ import json
 import threading
 from pathlib import Path
 from .models import Brief, Draft
+from .languages import LANGUAGES
 from .director import create_draft, compile_prompt, generation_inputs
 from .providers import FlovaCLIProvider, WaveSpeedPreSubmitError, find_flova_cli, seedance_tool, wavespeed_provider
 
@@ -10,6 +11,10 @@ class StudioService:
     def __init__(self, store, settings):
         self.store, self.settings = store, settings
         self.refresh_lock = threading.Lock()
+
+    def resolution(self):
+        config = self.settings.get()
+        return config['flova_resolution'] if config['video_provider'] == 'flova' else '480p'
 
     def resolve_assets(self, brief):
         actor_id = brief.character_id
@@ -39,7 +44,7 @@ class StudioService:
             brief.character_mode = 'upload'
             assets = self.resolve_assets(brief)
             draft = create_draft(brief, assets, self.settings)
-            prompt = compile_prompt(brief, draft)
+            prompt = compile_prompt(brief, draft, self.resolution())
             self.store.update_job(jid, status='draft_ready', draft=draft.model_dump(), prompt=prompt, error=None)
             self.write_artifacts(jid)
             self.checkpoint(jid, 'ugc_script', 'awaiting_human', {'ugc_draft': draft.model_dump()})
@@ -54,7 +59,10 @@ class StudioService:
             brief = Brief(**job['request'])
             brief.character_mode = 'upload'
             assets = self.resolve_assets(brief)
-            prompt = compile_prompt(brief, Draft(**job['draft']))
+            draft = Draft(**job['draft'])
+            if draft.language != brief.language:
+                raise ValueError('草稿语言与任务语言不一致。')
+            prompt = compile_prompt(brief, draft, self.resolution())
             config = self.settings.get()
             from lib.pipeline_loader import load_pipeline
             manifest = load_pipeline('brazil-ugc-game-ad')
@@ -63,8 +71,6 @@ class StudioService:
             instructions = (Path(__file__).resolve().parent.parent / stage['skill']).read_text(encoding='utf-8')
             if not instructions.strip():
                 raise ValueError('视频生成阶段 skill 为空。')
-            self.checkpoint(jid, 'ugc_script', 'completed', {'ugc_draft': job['draft']}, approved=True)
-            self.checkpoint(jid, 'ugc_generate', 'in_progress', {'generation_packet': self.packet(jid)})
             paths = [a['path'] for a in assets]
             if provider_name == 'ark':
                 inputs = generation_inputs(prompt, paths, config['ark_model'])
@@ -89,6 +95,8 @@ class StudioService:
                 raise ValueError('未知的视频服务。')
             # Persist exact backend/spec before crossing the paid request boundary.
             self.store.update_job(jid, prompt=prompt, provider=provider_name, model=model, preflight=preflight)
+            self.checkpoint(jid, 'ugc_script', 'completed', {'ugc_draft': job['draft']}, approved=True)
+            self.checkpoint(jid, 'ugc_generate', 'in_progress', {'generation_packet': self.packet(jid)})
         except Exception as exc:
             self.store.update_job(jid, status='draft_ready', error=self.safe_error(exc, '提交预检失败'))
             return
@@ -116,7 +124,7 @@ class StudioService:
                 if result['status'] == 'succeeded':
                     self.store.update_job(jid, status='succeeded', video_url=f'/api/videos/{jid}', error=None,
                         output_path=str(output), provider_project_url=result.get('project_url'),
-                        review_status='待人工检查：人物、手指、屏幕内容、连续性与葡语口型')
+                        review_status=f'待人工检查：人物、手指、屏幕内容、连续性与{LANGUAGES[brief.language]}口型')
                 else:
                     self.store.update_job(jid, status='submission_unknown', task_id=result.get('stream_chat_id'),
                         provider_project_url=result.get('project_url'), error='Flova 需要在项目页完成确认或核对任务状态。')
@@ -164,7 +172,7 @@ class StudioService:
                 if not output.is_file() or output.stat().st_size == 0:
                     raise ValueError('视频下载为空，请重试查询。')
                 job = self.store.update_job(jid, status='succeeded', video_url=f'/api/videos/{jid}', error=None,
-                        review_status='待人工检查：人物、手指、屏幕内容、连续性与葡语口型', output_path=str(output))
+                        review_status=f"待人工检查：人物、手指、屏幕内容、连续性与{LANGUAGES[Brief(**job['request']).language]}口型", output_path=str(output))
                 # Recovered provider tasks keep the approved script checkpoint from submission.
                 self.checkpoint(jid, 'ugc_generate', 'completed', {'generation_packet': self.packet(jid)})
             elif status in ('failed', 'cancelled', 'expired', 'timeout', 'deleted'):
@@ -197,7 +205,7 @@ class StudioService:
         for field, role in [('character_id', 'identity'), ('scene_id', 'environment'), ('game_id', 'phone_screen')]:
             if job['request'].get(field):
                 refs.append({'label': f'图片{len(refs)+1}', 'role': role, 'asset_id': job['request'][field]})
-        return {'pipeline': 'brazil-ugc-game-ad', 'duration': 15, 'aspect_ratio': '9:16', 'shot_count': 1,
+        return {'version': 2, 'language': Brief(**job['request']).language, 'pipeline': 'brazil-ugc-game-ad', 'duration': 15, 'aspect_ratio': '9:16', 'shot_count': 1,
                 'references': refs, 'prompt': job.get('prompt'), 'draft': job.get('draft'), 'task_id': job.get('task_id')}
 
     def checkpoint(self, jid, stage, status, artifacts, approved=False):

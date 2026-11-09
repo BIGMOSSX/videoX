@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ArrowUpRight, Camera, AudioLines, LoaderCircle } from "lucide-react";
-import type { Asset, Job } from "../api";
+import { languages, type Asset, type Job } from "../api";
 import { statusNames, shouldPoll } from "../status";
 import Button from "./smoothui/smooth-button";
 export default function DraftReview({
@@ -24,6 +24,8 @@ export default function DraftReview({
         <span className="tag">{statusNames[job.status] ?? job.status}</span>
       </div>
       <h2>{job.draft?.title ?? "导演正在组织这段故事"}</h2>
+      <p>任务语言：{languages[job.request.language ?? "pt-BR"]}</p>
+      {job.request.language_warning && <p className="message" role="note">{job.request.language_warning}</p>}
       <div className="reference-grid" aria-label="本任务参考图片">
         {([['character_id', '人物'], ['scene_id', '场景'], ['game_id', '游戏']] as const).map(([field, label]) => {
           const id = job.request[field];
@@ -55,8 +57,8 @@ export default function DraftReview({
       {job.draft && (
         <>
           <div className="dialogue">
-            <small>口播 / PORTUGUÊS BRASILEIRO</small>
-            <p lang="pt-BR">{job.draft.dialogue_pt_br}</p>
+            <small>口播 / {languages[job.request.language ?? "pt-BR"]}</small>
+            <p lang={job.request.language ?? "pt-BR"}>{job.draft.dialogue ?? job.draft.dialogue_pt_br}</p>
           </div>
           <div className="scene-directions">
             {job.draft.hook && <p><strong>开场钩子</strong>{job.draft.hook}</p>}

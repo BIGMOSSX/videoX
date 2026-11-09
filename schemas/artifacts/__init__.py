@@ -49,6 +49,11 @@ def validate_artifact(name: str, data: dict[str, Any]) -> None:
     """Validate artifact data against its schema. Raises on failure."""
     schema = load_schema(name)
     jsonschema.validate(instance=data, schema=schema)
+    # JSON Schema cannot compare two arbitrary property values. Enforce the
+    # legacy migration invariant for standalone drafts and packet snapshots.
+    draft = data if name == "ugc_draft" else data.get("draft") if name == "generation_packet" else None
+    if isinstance(draft, dict) and "dialogue" in draft and "dialogue_pt_br" in draft and draft["dialogue"] != draft["dialogue_pt_br"]:
+        raise ValueError("dialogue conflict between current and legacy fields")
 
 
 def list_schemas() -> list[str]:

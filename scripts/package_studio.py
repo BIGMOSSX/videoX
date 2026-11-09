@@ -20,7 +20,7 @@ def bundled_files(root: Path):
     return files
 
 
-def package():
+def package(output_path: Path | None = None):
     tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
     required = {'studio/frontend_build.py', 'studio/app.py', 'Start Studio.cmd',
                 'scripts/start-studio.ps1', 'requirements-studio.txt'}
@@ -37,12 +37,26 @@ def package():
     sys.path.insert(0, str(ROOT))
     from studio.frontend_build import fingerprint
     (web_dist / 'inputs.sha256').write_text(fingerprint(ROOT / 'studio-web'), encoding='ascii')
-    output = ROOT.parent / 'videoX-Brazil-UGC-Windows.zip'
+    output = Path(output_path) if output_path is not None else ROOT.parent / 'videoX-Brazil-UGC-Windows.zip'
     files = {ROOT / name for name in tracked if name}
     files.update(p for p in web_dist.rglob('*') if p.is_file())
     files.update(bundled_files(ROOT))
     # Include this build helper even before git staging; no broad untracked-file scan.
-    files.add(Path(__file__).resolve())
+    files.add(ROOT / 'scripts' / 'package_studio.py')
+    # These runtime modules are included even before staging, without scanning
+    # other untracked files. Missing modules must fail the build, not produce
+    # a ZIP that fails at startup.
+    for name in ('studio/languages.py', 'studio/language_check.py'):
+        source = ROOT / name
+        if not source.is_file() or source.is_symlink():
+            raise SystemExit(f'Missing required runtime module: {name}')
+        files.add(source)
+    # README links these specific implementation documents, including before staging.
+    for name in ('docs/multimarket-ugc-spec.md', 'docs/superpowers/plans/2026-11-09-multimarket-ugc.md'):
+        source = ROOT / name
+        if not source.is_file() or source.is_symlink():
+            raise SystemExit(f'Missing required documentation: {name}')
+        files.add(source)
     # The localized entry point is required even before it has been staged.
     launcher = ROOT / '一键启动.cmd'
     if not launcher.is_file():

@@ -66,6 +66,17 @@ def test_phone_stays_upright_and_game_image_is_locked_inside_screen():
     assert '手机顶部始终朝上' in prompt
 
 
+@pytest.mark.parametrize('language', ['pt-BR', 'es-MX', 'en-US', 'fil-PH'])
+@pytest.mark.parametrize('game_id', [None, 'game'])
+def test_phone_showcase_preserves_front_back_geometry_and_orientation(language, game_id):
+    brief = Brief(theme='手机游戏展示', character_id='actor', scene_id='scene', game_id=game_id, language=language)
+    prompt = compile_prompt(brief, Draft(**draft_data()))
+    assert '展示时手机必须竖握、屏幕正面朝向镜头、顶部朝上，不能拿反、不能镜像' in prompt
+    assert '屏幕和后置摄像头不能出现在同一面' in prompt
+    assert '手机背面只能显示背壳和后置摄像头，不能显示屏幕' in prompt
+    assert '水平转向镜头' in prompt
+
+
 def test_job_submission_claim_is_atomic_and_persists(tmp_path):
     store = Store(tmp_path)
     job = store.create_job({'theme': 'test'})
@@ -168,3 +179,53 @@ def test_batch_submission_rejects_duplicate_job_ids():
     from studio.models import BatchGenerate
     with pytest.raises(ValueError, match='重复'):
         BatchGenerate(job_ids=['same', 'same'])
+
+
+def test_multimarket_contract_and_legacy_dialogue():
+    from pydantic import ValidationError
+    from studio.models import BatchBrief
+    import pytest
+    for lang in ('pt-BR', 'es-MX', 'en-US', 'fil-PH'):
+        batch = BatchBrief(theme='test', count=10, character_mode='default', scene_ids=['s'], language=lang)
+        assert all(b.language == lang for b in batch.expand())
+        draft = Draft(**draft_data())
+        prompt = compile_prompt(batch.expand()[0], draft)
+        assert lang in prompt
+        if lang != 'pt-BR':
+            assert '巴西葡语' not in prompt
+    assert Brief(theme='test', character_id='a', scene_id='s').language == 'pt-BR'
+    with pytest.raises(ValidationError):
+        Brief(theme='test', character_id='a', scene_id='s', language='xx')
+    data = draft_data()
+    data['dialogue'] = 'different text'
+    with pytest.raises(ValidationError):
+        Draft(**data)
+
+
+def test_manual_dialogue_whitespace_and_resolution_are_preserved():
+    from studio.models import BatchBrief
+    text = '  Olha este jogo!  '
+    brief = BatchBrief(theme='test', character_mode='default', scene_ids=['s'], dialogue_lines=[text], language='es-MX').expand()[0]
+    assert brief.dialogue_override == text
+    data = draft_data()
+    data.pop('dialogue_pt_br')
+    data.update(dialogue=text, language='es-MX')
+    draft = Draft(**data)
+    assert draft.dialogue == text
+    prompt = compile_prompt(brief, draft, '720p')
+    assert text in prompt and '720p' in prompt and '480p' not in prompt
+
+
+def test_checkpoint_rejects_conflicting_dialogue_fields_and_accepts_legacy():
+    import pytest
+    from lib.checkpoint import _validate_artifacts_for_stage, CheckpointValidationError
+    old = draft_data()
+    _validate_artifacts_for_stage('ugc_script', 'completed', {'ugc_draft': old})
+    conflict = {**old, 'dialogue': 'Different dialogue'}
+    with pytest.raises(CheckpointValidationError, match='conflict'):
+        _validate_artifacts_for_stage('ugc_script', 'completed', {'ugc_draft': conflict})
+    packet = {'pipeline':'brazil-ugc-game-ad', 'duration':15, 'aspect_ratio':'9:16', 'shot_count':1,
+              'references':[{'label':'1','role':'identity','asset_id':'a'}, {'label':'2','role':'environment','asset_id':'s'}],
+              'prompt':'test', 'draft':conflict}
+    with pytest.raises(CheckpointValidationError, match='conflict'):
+        _validate_artifacts_for_stage('ugc_generate', 'completed', {'generation_packet': packet})

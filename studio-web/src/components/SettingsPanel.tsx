@@ -78,7 +78,7 @@ export default function SettingsPanel({
       <SectionTitle
         number="01"
         title="DeepSeek 视觉导演"
-        detail={`分析人物、场景和游戏截图并输出结构化巴西 UGC 草稿 · ${settings.configured.llm ? "已配置" : "未配置"}`}
+        detail={`分析人物、场景和游戏截图并输出结构化多市场 UGC 草稿 · ${settings.configured.llm ? "已配置" : "未配置"}`}
       />
       {field("llm_base_url", "DeepSeek API 地址")}
       {field("llm_model", "视觉模型名称")}

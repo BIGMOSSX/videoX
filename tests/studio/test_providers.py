@@ -1,5 +1,6 @@
 import io
 import json
+import pytest
 from PIL import Image
 from studio.assets import ingest_image
 from studio.config import Settings
@@ -130,6 +131,28 @@ def test_llm_receives_images_and_preserves_explicit_dialogue(tmp_path, monkeypat
     assert '厨房游戏' in messages[1]['content'][0]['text']
 
 
+@pytest.mark.parametrize('language', ['pt-BR', 'es-MX', 'en-US', 'fil-PH'])
+def test_director_gets_phone_geometry_rules_in_every_market(tmp_path, monkeypatch, language):
+    from studio.director import create_draft
+    store, settings, _, jid, ids = setup_job(tmp_path, monkeypatch)
+    calls = []
+    class Response:
+        ok = True
+        def json(self):
+            return {'choices': [{'message': {'content': json.dumps(draft_data())}}]}
+    def post(url, **kwargs):
+        calls.append(kwargs['json'])
+        return Response()
+    monkeypatch.setattr('studio.director.requests.post', post)
+    request = store.get_job(jid)['request']
+    request['language'] = language
+    create_draft(Brief(**request), [store.get_asset(aid) for aid in ids], settings)
+    system = calls[0]['messages'][0]['content']
+    assert '展示时手机必须竖握、屏幕正面朝向镜头、顶部朝上，不能拿反、不能镜像' in system
+    assert 'The back may be visible before display' in system
+    assert 'never a screen' in system
+
+
 def test_deepseek_json_mode_marker_is_removed_without_relaxing_draft_schema(tmp_path, monkeypatch):
     from studio.director import create_draft
     store, settings, _, jid, ids = setup_job(tmp_path, monkeypatch)
@@ -152,3 +175,115 @@ def test_deepseek_json_mode_marker_is_removed_without_relaxing_draft_schema(tmp_
         assert 'unexpected' in str(exc)
     else:
         raise AssertionError('unknown fields must remain forbidden')
+
+
+def test_flova_checkpoint_uses_recompiled_prompt_after_provider_change(tmp_path, monkeypatch):
+    store, settings, service, jid, _ = setup_job(tmp_path, monkeypatch)
+    store.save_settings({'video_provider': 'flova'})
+    store.update_job(jid, prompt='previous 480p prompt')
+    checkpoints = []
+    monkeypatch.setattr(service, 'checkpoint', lambda jid, stage, status, artifacts, **kw: checkpoints.append((stage, artifacts)))
+    monkeypatch.setattr('studio.service.find_flova_cli', lambda _: 'flova-test')
+    sent = []
+    class Provider:
+        def __init__(self, executable):
+            pass
+        def generate(self, **kwargs):
+            sent.append(kwargs['prompt'])
+            return {'status': 'pending'}
+    monkeypatch.setattr('studio.service.FlovaCLIProvider', Provider)
+    service.submit(jid)
+    packet = next(data['generation_packet'] for stage, data in checkpoints if stage == 'ugc_generate')
+    assert packet['prompt'] == sent[0] == store.get_job(jid)['prompt']
+    assert '720p' in packet['prompt'] and '480p' not in packet['prompt']
+
+
+def test_manual_dialogue_overrides_invalid_director_line_but_not_conflicting_fields(tmp_path, monkeypatch):
+    import pytest
+    from studio.director import create_draft
+    store, settings, _, jid, ids = setup_job(tmp_path, monkeypatch)
+    payload = {**draft_data(), 'dialogue_pt_br': ''}
+    class Response:
+        ok = True
+        def json(self):
+            return {'choices': [{'message': {'content': json.dumps(payload)}}]}
+    monkeypatch.setattr('studio.director.requests.post', lambda *args, **kwargs: Response())
+    brief = Brief(**store.get_job(jid)['request'], dialogue_override='  Original line!  ')
+    draft = create_draft(brief, [store.get_asset(aid) for aid in ids], settings)
+    assert draft.dialogue == '  Original line!  '
+    payload['dialogue'] = 'different'
+    with pytest.raises(ValueError, match='冲突'):
+        create_draft(brief, [store.get_asset(aid) for aid in ids], settings)
+
+
+@pytest.mark.parametrize('language', ['pt-BR', 'es-MX', 'en-US', 'fil-PH'])
+@pytest.mark.parametrize('provider', ['ark', 'wavespeed', 'flova'])
+def test_four_markets_reach_all_three_gateway_prompts(tmp_path, monkeypatch, language, provider):
+    from types import SimpleNamespace
+    from studio.languages import LANGUAGES
+    store, settings, service, jid, _ = setup_job(tmp_path, monkeypatch)
+    request = store.get_job(jid)['request']
+    request['language'] = language
+    draft = draft_data()
+    draft['language'] = language
+    store.update_job(jid, request=request, draft=draft)
+    store.save_settings({'video_provider': provider})
+    monkeypatch.setattr(settings, 'require', lambda _: None)
+    sent = []
+    class Ark:
+        def dry_run(self, inputs):
+            return {'valid': True, 'model': 'mock-ark', 'duration': 15, 'ratio': '9:16', 'resolution': '480p'}
+        def execute(self, inputs):
+            sent.append(inputs['prompt'])
+            return SimpleNamespace(success=True, data={'task_id': 'mock-task'})
+    class WaveSpeed:
+        def submit(self, **kwargs):
+            sent.append(kwargs['prompt'])
+            return {'id': 'mock-task'}
+    class Flova:
+        def __init__(self, executable):
+            pass
+        def generate(self, **kwargs):
+            sent.append(kwargs['prompt'])
+            return {'status': 'pending'}
+    monkeypatch.setattr('studio.service.seedance_tool', lambda _: Ark())
+    monkeypatch.setattr('studio.service.wavespeed_provider', lambda _: WaveSpeed())
+    monkeypatch.setattr('studio.service.find_flova_cli', lambda _: 'mock-flova')
+    monkeypatch.setattr('studio.service.FlovaCLIProvider', Flova)
+    service.submit(jid)
+    job = store.get_job(jid)
+    assert len(sent) == 1 and sent[0] == job['prompt']
+    assert language in sent[0] and LANGUAGES[language] in sent[0]
+    assert all(x in sent[0] for x in ('15秒', '9:16', '@image1', '@image2', '@image3', '一镜到底'))
+    assert '屏幕和后置摄像头不能出现在同一面' in sent[0]
+    assert '手机背面只能显示背壳和后置摄像头，不能显示屏幕' in sent[0]
+    assert ('720p' if provider == 'flova' else '480p') in sent[0]
+    if language != 'pt-BR':
+        assert '巴西葡语' not in sent[0] and 'pt-BR' not in sent[0]
+    assert service.packet(jid)['language'] == language
+
+
+def test_legacy_draft_ready_submission_and_restart_query_do_not_resubmit(tmp_path, monkeypatch):
+    store, settings, service, jid, _ = setup_job(tmp_path, monkeypatch)
+    # setup_job has no request.language and has legacy dialogue_pt_br only.
+    assert 'language' not in store.get_job(jid)['request']
+    assert 'dialogue_pt_br' in store.get_job(jid)['draft']
+    store.save_settings({'video_provider': 'wavespeed'})
+    submitted, queried = [], []
+    class Provider:
+        def submit(self, **kwargs):
+            submitted.append(kwargs['prompt'])
+            return {'id': 'existing-provider-id'}
+        def query(self, task_id):
+            queried.append(task_id)
+            return {'status': 'running'}
+    monkeypatch.setattr('studio.service.wavespeed_provider', lambda _: Provider())
+    service.submit(jid)
+    assert len(submitted) == 1 and 'pt-BR' in submitted[0]
+    assert store.get_job(jid)['status'] == 'queued'
+    restored = Store(tmp_path)
+    restored.recover()
+    StudioService(restored, settings).refresh(jid)
+    assert queried == ['existing-provider-id'] and len(submitted) == 1
+    assert restored.get_job(jid)['status'] == 'running'
+    assert restored.claim_submission(jid) is False

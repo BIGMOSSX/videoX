@@ -10,7 +10,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
 from .assets import ingest_image, public_asset, seed_builtin_assets, MAX_BYTES
 from .config import Settings, ConfigurationError
-from .models import BatchBrief, BatchGenerate, Brief, SettingsPatch, SceneSearch, SceneImport
+from .models import BatchBrief, BatchGenerate, Brief, SettingsPatch, SceneSearch, SceneImport, LanguageCheckRequest
 from .store import Store
 from .service import StudioService
 from .pinterest import search_board, import_pin
@@ -123,11 +123,16 @@ def create_app(data_dir=None, builtin_dir=None):
 
     @app.post('/api/scenes/search')
     def scene_search(query: SceneSearch):
-        return search_board(settings, query.query, query.bookmark)
+        return search_board(settings, query.query, query.bookmark, query.language)
 
     @app.post('/api/scenes/import')
     def scene_import(data: SceneImport):
         return public_asset(import_pin(settings, store, data.pin_id))
+
+    @app.post('/api/language-check')
+    def language_check(data: LanguageCheckRequest):
+        from .language_check import check_dialogue
+        return check_dialogue(data.language, data.dialogue_lines, settings)
 
     @app.post('/api/drafts')
     def draft(brief: Brief, background: BackgroundTasks):

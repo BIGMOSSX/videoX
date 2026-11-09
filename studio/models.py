@@ -1,16 +1,21 @@
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import uuid4
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from .languages import Language
+
+ExactText = Annotated[str, StringConstraints(strip_whitespace=False)]
 
 
 class Brief(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    language: Language = 'pt-BR'
     theme: str = Field(min_length=2, max_length=2000)
     character_mode: Literal['upload', 'default'] = 'upload'
     character_id: str | None = None
     scene_id: str = Field(min_length=1, max_length=100)
     game_id: str | None = None
-    dialogue_override: str | None = Field(default=None, max_length=500)
+    dialogue_override: ExactText | None = Field(default=None, max_length=500)
+    language_warning: str | None = Field(default=None, max_length=500)
     variation_index: int = Field(default=1, ge=1, le=10)
     variation_count: int = Field(default=1, ge=1, le=10)
     variation_direction: str = Field(default='', max_length=500)
@@ -40,13 +45,15 @@ VARIATION_DIRECTIONS = [
 class BatchBrief(BaseModel):
     """One creative request expanded into independently reviewable paid jobs."""
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    language: Language = 'pt-BR'
     theme: str = Field(min_length=2, max_length=2000)
     count: int = Field(default=1, ge=1, le=10)
     character_mode: Literal['upload', 'default'] = 'upload'
     character_ids: list[str] = Field(default_factory=list, max_length=10)
     scene_ids: list[str] = Field(min_length=1, max_length=10)
     game_ids: list[str] = Field(default_factory=list, max_length=10)
-    dialogue_lines: list[str] = Field(default_factory=list, max_length=10)
+    dialogue_lines: list[ExactText] = Field(default_factory=list, max_length=10)
+    language_warnings: list[str] = Field(default_factory=list, max_length=10)
 
     @model_validator(mode='after')
     def validate_pools(self):
@@ -54,6 +61,8 @@ class BatchBrief(BaseModel):
             raise ValueError('请至少上传一张人物照片。')
         if self.dialogue_lines and len(self.dialogue_lines) != self.count:
             raise ValueError('手动台词需要每条视频一行，行数必须与生成数量一致。')
+        if self.language_warnings and len(self.language_warnings) != self.count:
+            raise ValueError('语言提示须与视频数量一致。')
         if len(set(self.scene_ids)) != len(self.scene_ids):
             raise ValueError('场景池中不要重复选择同一张图。')
         return self
@@ -65,9 +74,10 @@ class BatchBrief(BaseModel):
             actor = None if self.character_mode == 'default' else self.character_ids[index % len(self.character_ids)]
             game = self.game_ids[index % len(self.game_ids)] if self.game_ids else None
             briefs.append(Brief(
-                theme=self.theme, character_mode=self.character_mode, character_id=actor,
+                theme=self.theme, language=self.language, character_mode=self.character_mode, character_id=actor,
                 scene_id=self.scene_ids[index % len(self.scene_ids)], game_id=game,
                 dialogue_override=self.dialogue_lines[index] if self.dialogue_lines else None,
+                language_warning=self.language_warnings[index] if self.language_warnings else None,
                 variation_index=index + 1, variation_count=self.count,
                 variation_direction=VARIATION_DIRECTIONS[index],
                 batch_id=batch_id,
@@ -97,9 +107,25 @@ class Beat(BaseModel):
 
 class Draft(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    language: Language = 'pt-BR'
     title: str = Field(min_length=1, max_length=150)
     hook: str = Field(min_length=1, max_length=1000)
-    dialogue_pt_br: str = Field(min_length=2, max_length=500)
+    dialogue: ExactText = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_dialogue(cls, value):
+        if isinstance(value, dict) and "dialogue_pt_br" in value:
+            value = dict(value)
+            old = value.pop("dialogue_pt_br")
+            if "dialogue" in value and value["dialogue"] != old:
+                raise ValueError("dialogue 与旧 dialogue_pt_br 字段冲突。")
+            value.setdefault("dialogue", old)
+        return value
+
+    @property
+    def dialogue_pt_br(self):
+        return self.dialogue
     scene_description: str = Field(min_length=4, max_length=1000)
     background_motion: str = Field(min_length=4, max_length=1000)
     ambience: str = Field(min_length=4, max_length=1000)
@@ -135,9 +161,16 @@ class SettingsPatch(BaseModel):
 
 
 class SceneSearch(BaseModel):
+    language: Language = 'pt-BR'
     query: str = Field(default='', max_length=300)
     bookmark: str | None = Field(default=None, max_length=2000)
 
 
 class SceneImport(BaseModel):
     pin_id: str = Field(pattern=r'^\d{1,40}$')
+
+
+class LanguageCheckRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    language: Language = 'pt-BR'
+    dialogue_lines: list[Annotated[str, StringConstraints(max_length=500)]] = Field(default_factory=list, max_length=10)

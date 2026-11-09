@@ -243,3 +243,67 @@ describe("studio", () => {
     expect(vi.mocked(fetch).mock.calls.every((c) => !c[1]?.method)).toBe(true);
   });
 });
+
+it("checks language conservatively and invalidates stale replies when the market changes", async () => {
+  let resolveCheck: (value: unknown) => void = () => {};
+  mockFetch((path) => {
+    if (path === "/api/language-check") return new Promise((resolve) => { resolveCheck = resolve; });
+  });
+  render(<App />);
+  const market = screen.getByLabelText("市场 / 口播语言");
+  expect(market).toHaveValue("pt-BR");
+  const input = screen.getByLabelText("巴西葡语台词（可选）");
+  fireEvent.change(input, { target: { value: "This is a complete English sentence" } });
+  fireEvent.blur(input);
+  await waitFor(() => expect(resolveCheck).not.toBeUndefined());
+  await userEvent.selectOptions(market, "es-MX");
+  expect(screen.getByLabelText("墨西哥西班牙语台词（可选）")).toHaveValue("This is a complete English sentence");
+  resolveCheck({ ok: true, json: async () => ({ status: "ok", results: [{line: 1, status: "likely_mismatch", message: "过期提示"}] }) });
+  await waitFor(() => expect(screen.queryByText("过期提示")).not.toBeInTheDocument());
+});
+
+it("submits the selected market and untrimmed nonempty dialogue after the warning", async () => {
+  const bundled = [
+    { id: "actor", role: "character", name: "actor.jpg", url: "/api/media/actor", source_url: "builtin://character/actor.jpg" },
+    { id: "room", role: "scene", name: "room.jpg", url: "/api/media/room", source_url: "builtin://scene/room.jpg" },
+  ];
+  let brief: Record<string, unknown> | undefined;
+  mockFetch((path, options) => {
+    if (path === "/api/assets") return { ok: true, json: async () => bundled };
+    if (path === "/api/language-check") return { ok: true, json: async () => ({status: "ok", results: [{line: 1, status: "likely_mismatch", message: "第 1 条台词可能是英语，请检查。"}]}) };
+    if (path === "/api/drafts/batch") { brief = JSON.parse(String(options?.body)); return {ok: true, json: async () => [{id: "draft", theme: "主题", status: "drafting", request: brief}]}; }
+  });
+  render(<App />);
+  await userEvent.type(screen.getByLabelText("视频主题"), "客厅游戏");
+  await userEvent.click(screen.getByRole("tab", {name: "内置人物"}));
+  await userEvent.click(screen.getByRole("button", {name: /选择人物 actor.jpg/}));
+  await userEvent.click(screen.getByRole("tab", {name: "内置场景"}));
+  await userEvent.click(screen.getByRole("button", {name: /选择场景 room.jpg/}));
+  await userEvent.selectOptions(screen.getByLabelText("市场 / 口播语言"), "es-MX");
+  const field = screen.getByLabelText("墨西哥西班牙语台词（可选）");
+  fireEvent.change(field, {target: {value: "  This is an English sentence for you.  \n\n"}});
+  fireEvent.blur(field);
+  expect(await screen.findByText(/第 1 条台词可能是英语/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", {name: /生成导演草稿/}));
+  await waitFor(() => expect(brief).toMatchObject({language: "es-MX", dialogue_lines: ["  This is an English sentence for you.  "], language_warnings: ["第 1 条台词可能是英语，请检查。"]}));
+});
+
+it("lets users retry a failed language check without editing the text", async () => {
+  let calls = 0;
+  mockFetch((path) => {
+    if (path === "/api/language-check") {
+      calls++;
+      return {ok: true, json: async () => calls === 1
+        ? {status: "failed", results: [], message: "语言检查失败"}
+        : {status: "ok", results: [{line: 1, status: "match", message: "一致"}]}};
+    }
+  });
+  render(<App />);
+  const input = screen.getByLabelText("巴西葡语台词（可选）");
+  fireEvent.change(input, {target: {value: "Esta é uma frase longa para testar agora"}});
+  fireEvent.blur(input);
+  expect(await screen.findByText("语言检查失败")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", {name: "重新检查台词语言"}));
+  await waitFor(() => expect(calls).toBe(2));
+  expect(await screen.findByText("台词语言检查完成。")).toBeInTheDocument();
+});

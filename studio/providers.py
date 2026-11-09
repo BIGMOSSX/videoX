@@ -190,7 +190,7 @@ class FlovaCLIProvider:
 
         created, _ = self._call([
             'project', 'create', '--name', project_name[:120],
-            '--description', 'videoX Brazil UGC batch item; one 15-second continuous take',
+            '--description', 'videoX UGC batch item; one 15-second continuous take',
         ], timeout=60)
         project = self._data(created)
         project_id = project.get('project_id')

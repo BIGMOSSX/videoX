@@ -31,6 +31,9 @@ import {
   type Role,
   type Settings,
   type SceneResults,
+  type Language,
+  type LanguageCheck,
+  languages,
 } from "./api";
 
 const roleNames = { character: "人物", scene: "场景", game: "游戏画面" };
@@ -47,11 +50,33 @@ export default function App() {
     pollLock = useRef(false);
   const [theme, setTheme] = useState(""),
     [dialogue, setDialogue] = useState(""),
+    [language, setLanguage] = useState<Language>("pt-BR"),
     [count, setCount] = useState(1),
     [mode, setMode] = useState("upload"),
     [selected, setSelected] = useState<Partial<Record<Role, string>>>({}),
     [scenePool, setScenePool] = useState<string[]>([]),
     [active, setActive] = useState<string | null>(null);
+  const [checkResult, setCheckResult] = useState<LanguageCheck | null>(null);
+  const [checking, setChecking] = useState(false);
+  const checkVersion = useRef(0);
+  const sceneVersion = useRef(0);
+  const checkCache = useRef<{key: string; result: LanguageCheck} | null>(null);
+  const checkPending = useRef<{key: string; promise: Promise<LanguageCheck>} | null>(null);
+  const dialogueLines = () => dialogue.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  function invalidateCheck() { checkVersion.current++; checkCache.current = null; setCheckResult(null); setChecking(false); }
+  async function checkLanguage(lines: string[], selectedLanguage: Language): Promise<LanguageCheck> {
+    if (!lines.length) return {status: "ok", results: []};
+    const key = JSON.stringify([selectedLanguage, lines]);
+    const version = checkVersion.current;
+    if (checkCache.current?.key === key) return checkCache.current.result;
+    setChecking(true);
+    const promise = checkPending.current?.key === key ? checkPending.current.promise : post<LanguageCheck>("/language-check", {language: selectedLanguage, dialogue_lines: lines}).catch(() => ({status: "failed" as const, results: [], message: "语言检查失败，无法判断台词语言；可保留原文继续。"}));
+    checkPending.current = {key, promise};
+    const result = await promise;
+    if (checkVersion.current === version) { checkCache.current = {key, result}; setCheckResult(result); setChecking(false); }
+    if (checkPending.current?.promise === promise) checkPending.current = null;
+    return result;
+  }
   const [sceneMode, setSceneMode] = useState("upload"),
     [query, setQuery] = useState(""),
     [scenes, setScenes] = useState<SceneResults | null>(null);
@@ -232,9 +257,23 @@ export default function App() {
       if (!theme.trim()) throw new Error("先填写这支视频的主题。");
       if (!character) throw new Error("请选择一张人物图片，或先设置默认人物。");
       if (!references.scene) throw new Error("请选择场景参考图。");
-      const dialogueLines = dialogue.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-      if (dialogueLines.length && dialogueLines.length !== count)
+      const lines = dialogueLines();
+      if (lines.length && lines.length !== count)
         throw new Error(`当前是 ${count} 条视频，请每条台词一行，共填 ${count} 行；或全部留空由导演创作。`);
+      const version = checkVersion.current;
+      const key = JSON.stringify([language, lines]);
+      const wasVisible = checkCache.current?.key === key;
+      const checked = await checkLanguage(lines, language);
+      if (version !== checkVersion.current) throw new Error("台词或市场已修改，请重新生成草稿。");
+      if (lines.length && !wasVisible && (checked.status === "failed" || checked.results.some((item) => item.status !== "match"))) {
+        setNotice("请查看台词语言提示；确认保留原文后再次点击生成草稿。 ");
+        return;
+      }
+      const warnings = lines.length ? lines.map((_, index) => {
+        if (checked.status === "failed") return checked.message ?? "语言检查失败，无法判断台词语言。";
+        const result = checked.results.find((item) => item.line === index + 1);
+        return result && result.status !== "match" ? result.message : "";
+      }) : [];
       const created = await post<Job[]>("/drafts/batch", {
         theme: theme.trim(),
         count,
@@ -242,7 +281,9 @@ export default function App() {
         character_ids: mode === "default" ? [] : [character.id],
         scene_ids: sceneMode === "library" ? scenePool.slice(0, count) : [references.scene.id],
         game_ids: references.game ? [references.game.id] : [],
-        dialogue_lines: dialogueLines,
+        language,
+        dialogue_lines: lines,
+        language_warnings: warnings,
       });
       mergeJobs(created);
       setActive(created[0].id);
@@ -262,7 +303,7 @@ export default function App() {
         >
           video<span>X</span>
           <span className="brand-divider" />
-          <small>巴西 UGC 工作室</small>
+          <small>多市场 UGC 工作室</small>
         </a>
         <Tabs
           activeTab={tab}
@@ -294,7 +335,7 @@ export default function App() {
             </h1>
             <p>
               {tab === "create"
-                ? "一个人物，一个场景。把你的想法变成 15 秒巴西葡语 UGC。"
+                ? "一个人物，一个场景。把你的想法变成 15 秒多市场 UGC。"
                 : tab === "jobs"
                   ? "查看草稿、跟踪生成状态，找回保存在本地的视频。"
                   : "连接导演模型、视频服务与授权 Pinterest Board。"}
@@ -341,7 +382,7 @@ export default function App() {
                 <SectionTitle
                   number="01"
                   title="这次，想说什么？"
-                  detail="描述产品亮点、使用感受或开场想法，导演会组织葡语口播。"
+                  detail="描述产品亮点、使用感受或开场想法，导演会组织所选语言口播。"
                 />
                 <Field>
                   <Input
@@ -446,13 +487,11 @@ export default function App() {
                           disabled={!!busy || (!query.trim() && !theme.trim())}
                           loading={busy === "search"}
                           onClick={() =>
-                            void act("search", async () =>
-                              setScenes(
-                                await post<SceneResults>("/scenes/search", {
-                                  query: query.trim() || theme.trim(),
-                                }),
-                              ),
-                            )
+                            void act("search", async () => {
+                              const version = sceneVersion.current;
+                              const result = await post<SceneResults>("/scenes/search", {query: query.trim() || theme.trim(), language});
+                              if (sceneVersion.current === version) setScenes(result);
+                            })
                           }
                         >
                           查找场景 <ArrowUpRight size={14} />
@@ -510,14 +549,16 @@ export default function App() {
                                 disabled={!!busy}
                                 onClick={() =>
                                   void act("search", async () => {
+                                    const version = sceneVersion.current;
                                     const next = await post<SceneResults>(
                                       "/scenes/search",
                                       {
                                         query: query.trim() || theme.trim(),
+                                  language,
                                         bookmark: scenes.bookmark,
                                       },
                                     );
-                                    setScenes({
+                                    if (sceneVersion.current === version) setScenes({
                                       ...next,
                                       items: [...scenes.items, ...next.items],
                                     });
@@ -561,11 +602,24 @@ export default function App() {
                   <small>每条会生成独立的钩子、人物动作、运镜路径、环境触发和台词。WaveSpeed 480p / 15秒当前参考价约 ${(count * 0.9).toFixed(2)} 美元/批。</small>
                 </Field>
                 <Field>
-                  <label htmlFor="dialogue-lines">巴西葡语台词（可选）</label>
+                  <label htmlFor="market-language">市场 / 口播语言</label>
+                  <select id="market-language" value={language} onChange={(event) => { invalidateCheck(); sceneVersion.current++; setLanguage(event.target.value as Language); setScenes(null); }}>
+                    <option value="pt-BR">巴西 · 巴西葡语</option><option value="es-MX">墨西哥 · 墨西哥西班牙语</option><option value="en-US">美国 · 美式英语</option><option value="fil-PH">菲律宾 · Filipino（菲律宾语）</option>
+                  </select>
+                </Field>
+                <Field>
+                  <label htmlFor="dialogue-lines">{languages[language]}台词（可选）</label>
                   <textarea id="dialogue-lines" rows={Math.min(10, Math.max(3, count))}
                     placeholder={count === 1 ? "留空由导演创作，或填写一条台词" : `留空由导演创作 ${count} 条，或每条视频填一行（共 ${count} 行）`}
-                    value={dialogue} onChange={(event) => setDialogue(event.target.value)} />
-                  <small>填写时会逐行原样保留；留空时由多模态导演模型根据每条的场景与钩子分别写。</small>
+                    value={dialogue} aria-describedby="dialogue-help dialogue-check" onChange={(event) => { invalidateCheck(); setDialogue(event.target.value); }} onBlur={() => void checkLanguage(dialogueLines(), language)} />
+                  <small id="dialogue-help">填写时逐行原样保留；留空时由导演创作。语言检查会额外调用已配置的导演模型，可能产生少量费用。</small>
+                  <div id="dialogue-check" role="status" aria-live="polite">
+                    {checking && <p>正在检查台词语言…</p>}
+                    {checkResult?.status === "failed" && <><p>{checkResult.message}</p><Button type="button" variant="ghost" disabled={checking} onClick={() => { checkCache.current = null; void checkLanguage(dialogueLines(), language); }}>重新检查台词语言</Button></>}
+                    {checkResult?.status === "ok" && checkResult.results.filter((item) => item.status !== "match").map((item) => <p key={item.line}>{item.message}</p>)}
+                    {checkResult?.status === "ok" && checkResult.results.length > 0 && checkResult.results.every((item) => item.status === "match") && <p>台词语言检查完成。</p>}
+                    {checkResult && <small>提示仅供参考，可以保留原文继续。</small>}
+                  </div>
                 </Field>
                 <div className="submit-row">
                   <p>
@@ -764,6 +818,7 @@ export default function App() {
                         {new Date(job.created_at).toLocaleString("zh-CN")}
                       </small>
                       <h3>{job.theme}</h3>
+                      <small>任务语言：{languages[job.request.language ?? "pt-BR"]}</small>
                     </div>
                     <span className="tag">
                       {statusNames[job.status] ?? job.status}

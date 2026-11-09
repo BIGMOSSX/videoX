@@ -210,3 +210,49 @@ it("submits an approved multi-draft batch with one paid action", async () => {
   await waitFor(() => expect(batchBody).toEqual({ job_ids: ["draft-1", "draft-2"] }));
   expect(screen.getByText(/本批 2 条已进入提交队列/)).toBeInTheDocument();
 });
+
+it("ignores old-market Pinterest search responses after a market change", async () => {
+  let resolveSearch: (value: unknown) => void = () => {};
+  let started = false;
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    if (path === "/api/scenes/search") {
+      started = true;
+      return new Promise((resolve) => { resolveSearch = resolve; });
+    }
+    return {ok: true, json: async () => path === "/api/settings" ? settings : []};
+  }));
+  render(<App />);
+  await userEvent.type(screen.getByLabelText("视频主题"), "厨房场景");
+  await userEvent.click(screen.getByRole("tab", {name: "Pinterest"}));
+  await userEvent.click(screen.getByRole("button", {name: /查找场景/}));
+  await waitFor(() => expect(started).toBe(true));
+  await userEvent.selectOptions(screen.getByLabelText("市场 / 口播语言"), "es-MX");
+  resolveSearch({ok: true, json: async () => ({items: [], search_url: "https://example.com", recommended_query: "过期市场结果", bookmark: "old-page"})});
+  await waitFor(() => expect(screen.getByRole("button", {name: /查找场景/})).toBeEnabled());
+  expect(screen.queryByText(/过期市场结果/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", {name: "更多候选"})).not.toBeInTheDocument();
+});
+
+it("ignores a pending old-market Pinterest pagination response", async () => {
+  let resolveMore: (value: unknown) => void = () => {};
+  let calls = 0;
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    if (path === "/api/scenes/search") {
+      calls++;
+      if (calls === 1) return {ok: true, json: async () => ({items: [], search_url: "https://example.com", bookmark: "page-2"})};
+      return new Promise((resolve) => { resolveMore = resolve; });
+    }
+    return {ok: true, json: async () => path === "/api/settings" ? settings : []};
+  }));
+  render(<App />);
+  await userEvent.type(screen.getByLabelText("视频主题"), "厨房场景");
+  await userEvent.click(screen.getByRole("tab", {name: "Pinterest"}));
+  await userEvent.click(screen.getByRole("button", {name: /查找场景/}));
+  await userEvent.click(await screen.findByRole("button", {name: "更多候选"}));
+  await waitFor(() => expect(calls).toBe(2));
+  await userEvent.selectOptions(screen.getByLabelText("市场 / 口播语言"), "en-US");
+  resolveMore({ok: true, json: async () => ({items: [], search_url: "https://example.com", recommended_query: "过期分页", bookmark: "page-3"})});
+  await waitFor(() => expect(screen.getByRole("button", {name: /查找场景/})).toBeEnabled());
+  expect(screen.queryByText(/过期分页/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", {name: "更多候选"})).not.toBeInTheDocument();
+});

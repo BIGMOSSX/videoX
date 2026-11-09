@@ -35,7 +35,8 @@ body {
 }
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 button {
@@ -81,6 +82,17 @@ input {
 input:focus {
   border-color: #a1a1aa !important;
 }
+select {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border: 1px solid #ececee;
+  border-radius: 14px;
+  background: #fff;
+  color: #09090b;
+}
+select:focus-visible { outline: 2px solid #52525b; outline-offset: 2px; }
 textarea {
   width: 100%;
   margin-top: 8px;

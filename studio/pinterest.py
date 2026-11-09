@@ -30,10 +30,10 @@ def safe_pin_image(url):
     return parsed.scheme == 'https' and parsed.hostname == 'i.pinimg.com' and not parsed.username and parsed.port in (None, 443)
 
 
-def search_board(settings, query, bookmark=None):
+def search_board(settings, query, bookmark=None, language="pt-BR"):
     settings.require('pinterest')
     from .director import scene_query
-    query = scene_query(query, settings)
+    query = scene_query(query, settings, language)
     board_id = settings.get()['pinterest_board_id']
     if not board_id.isdigit():
         settings.require('pinterest')
@@ -53,7 +53,7 @@ def search_board(settings, query, bookmark=None):
         if url:
             items.append({'id': pin['id'], 'title': title[:250], 'url': f"https://www.pinterest.com/pin/{pin['id']}/", 'image_url': url})
     return {'items': items, 'bookmark': data.get('bookmark'), 'recommended_query': query,
-            'search_url': 'https://www.pinterest.com/search/pins/?' + urlencode({'q': query or 'interior casa Brasil luz natural sem pessoas'})}
+            'search_url': 'https://www.pinterest.com/search/pins/?' + urlencode({'q': query or {'pt-BR': 'interior casa Brasil luz natural sem pessoas', 'es-MX': 'interior casa México luz natural sin personas', 'en-US': 'home interior natural light no people', 'fil-PH': 'bahay interior natural na ilaw walang tao'}[language]})}
 
 
 def import_pin(settings, store, pin_id):

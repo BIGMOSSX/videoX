@@ -1,3 +1,6 @@
+export const languages = { "pt-BR": "巴西葡语", "es-MX": "墨西哥西班牙语", "en-US": "美式英语", "fil-PH": "Filipino（菲律宾语）" } as const;
+export type Language = keyof typeof languages;
+export interface LanguageCheck { status: "ok" | "failed"; message?: string; results: { line: number; status: "match" | "likely_mismatch" | "uncertain"; message: string }[] }
 export type Role = "character" | "scene" | "game";
 export interface Asset {
   id: string;
@@ -35,6 +38,8 @@ export interface Job {
   review_status?: string;
   task_id?: string;
   request: {
+    language?: Language;
+    language_warning?: string | null;
     character_id?: string;
     scene_id?: string;
     game_id?: string;
@@ -45,7 +50,9 @@ export interface Job {
   draft?: {
     title: string;
     hook: string;
-    dialogue_pt_br: string;
+    language?: Language;
+    dialogue?: string;
+    dialogue_pt_br?: string;
     scene_description: string;
     background_motion: string;
     ambience: string;
