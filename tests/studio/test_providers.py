@@ -180,6 +180,9 @@ def test_deepseek_json_mode_marker_is_removed_without_relaxing_draft_schema(tmp_
 def test_flova_checkpoint_uses_recompiled_prompt_after_provider_change(tmp_path, monkeypatch):
     store, settings, service, jid, _ = setup_job(tmp_path, monkeypatch)
     store.save_settings({'video_provider': 'flova'})
+    # This test exercises the generated checkpoint and uses a fake provider;
+    # it must not depend on a Flova CLI or credentials on the test machine.
+    monkeypatch.setattr(settings, 'require', lambda provider: None)
     store.update_job(jid, prompt='previous 480p prompt')
     checkpoints = []
     monkeypatch.setattr(service, 'checkpoint', lambda jid, stage, status, artifacts, **kw: checkpoints.append((stage, artifacts)))
